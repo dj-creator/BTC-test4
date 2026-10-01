@@ -1,0 +1,12 @@
+node_modules
+dist
+.output
+.vinxi
+.tanstack
+.vercel
+.env
+.env.*
+*.log
+artifacts
+attachments
+screenshots

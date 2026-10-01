@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #07080b;
+  --color-surface: #101216;
+  --color-surface-2: #171a20;
+  --color-fg: #e7ebf0;
+  --color-muted: #8b939e;
+  --color-line: #2a3038;
+  --color-up: #3ecf8e;
+  --color-down: #e15b6a;
+  --color-warn: #d4a24a;
+  --color-accent: #9fd4e0;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@keyframes tick-up {
+  from {
+    background-color: color-mix(in oklab, var(--color-up) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes tick-down {
+  from {
+    background-color: color-mix(in oklab, var(--color-down) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.page-wrap {
+  width: 100%;
+  max-width: 1400px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+@media (min-width: 640px) {
+  .page-wrap {
+    padding-inline: 1.5rem;
+  }
+}
+
+.desk-wrap {
+  gap: 1rem;
+  padding: 1.25rem 1.25rem 2rem;
+}
+
+@media (min-width: 640px) {
+  .desk-wrap {
+    padding-inline: 1.75rem;
+  }
+}
+
+.entry-flash-up {
+  animation: tick-up 1.2s ease-out;
+}
+
+.coin {
+  position: relative;
+  width: 2.5rem;
+  height: 2.5rem;
+  transform-style: preserve-3d;
+  transition: transform 0.7s ease;
+}
+
+.coin-buy {
+  transform: rotateY(0deg);
+}
+
+.coin-sell {
+  transform: rotateY(180deg);
+}
+
+.coin-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  backface-visibility: hidden;
+}
+
+.coin-front {
+  background: var(--color-up);
+}
+
+.coin-back {
+  background: var(--color-down);
+  transform: rotateY(180deg);
+}
+
+.coin-quiet .coin-front,
+.coin-quiet .coin-back {
+  background: var(--color-line);
+}
+
+.tick-down {
+  animation: tick-down 180ms ease-out;
+}
+
+.vol-stage {
+  perspective: 240px;
+}
+
+.vol-arrow {
+  display: inline-flex;
+  transform-style: preserve-3d;
+  transition: transform 480ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.vol-arrow.up {
+  transform: rotateX(0deg);
+}
+
+.vol-arrow.down {
+  transform: rotateX(180deg);
+}
+
+.vol-arrow.flat {
+  transform: rotateX(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
