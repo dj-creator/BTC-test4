@@ -1,6 +1,4 @@
 import { buildModel, fifteenMinuteWindows } from "./model.ts";
-import { tickNudge } from "./ta.ts";
-import { candleProbabilityDelta, type CandleSignal } from "./candles.ts";
 import type { Candle, MarketQuote } from "./types";
 
 export type Signal = "up" | "down" | "wait";
@@ -89,12 +87,9 @@ export function outlookNow(input: {
   spot: number | null;
   start: number | null;
   windowStart: number;
-  asks: MarketQuote | null;
+  asks?: MarketQuote | null;
   now: number;
   spotAt?: number | null;
-  trades?: { t: number; px: number; btc?: number }[];
-  candle?: CandleSignal | null;
-  votes?: SiteVote[];
 }) {
   const model = buildModel({
     candles: input.candles,
@@ -102,15 +97,11 @@ export function outlookNow(input: {
     market: input.start != null ? marketAt(input.windowStart, input.start, null) : null,
     now: input.now,
     spotAt: input.spotAt,
-    target: "spot",
+    targetType: "coinbase_window_close",
   });
-  const nudge = model.paused || model.pUp == null ? 0 : tickNudge(input.trades ?? []).nudge;
-  const site = siteAdjustment(input.votes ?? []);
-  const pUp = model.pUp == null ? null : Math.min(0.98, Math.max(0.02, model.pUp + nudge + candleProbabilityDelta(input.candle) + site.points / 100));
+  const pUp = model.pUp;
   return {
     model: { ...model, pUp },
-    sitePoints: site.points,
-    siteWhy: site.names,
     outlook: describeOutlook({
       pUp,
       momentum: model.momentum,
@@ -120,44 +111,6 @@ export function outlookNow(input: {
       reason: model.reason,
     }),
   };
-}
-
-export type SiteVote = { name: string; lean: number };
-
-export function siteVotes(input: {
-  candle: CandleSignal | null | undefined;
-  radar: string;
-  book: string;
-  whale: string;
-  vwap: "up" | "down" | "flat";
-  move30: number | null;
-  move5: number | null;
-  kalshiYes: number | null;
-}): SiteVote[] {
-  const candleLean = input.candle == null ? 0 : (input.candle.direction === "bullish" ? 1 : input.candle.direction === "bearish" ? -1 : 0)
-    * (input.candle.strength === "strong" ? 1 : input.candle.strength === "moderate" ? 0.7 : input.candle.strength === "weak" ? 0.4 : 0)
-    * (input.candle.confirmedPatterns.length === 0 && input.candle.formingPatterns.length > 0 ? 0.5 : 1);
-  const radarLean = input.radar === "STRONG UP" ? 1 : input.radar === "UP" ? 0.6 : input.radar === "DOWN" ? -0.6 : input.radar === "STRONG DOWN" ? -1 : 0;
-  const side = (value: string) => value === "yes" || value === "up" ? 1 : value === "no" || value === "down" ? -1 : 0;
-  const clip = (n: number | null, scale: number) => n == null ? 0 : Math.max(-1, Math.min(1, n / scale));
-  const kalshi = input.kalshiYes == null ? 0 : Math.max(-0.5, Math.min(0.5, input.kalshiYes - 0.5));
-  return [
-    { name: "candles", lean: candleLean },
-    { name: "radar", lean: radarLean },
-    { name: "order book", lean: side(input.book) },
-    { name: "big money", lean: side(input.whale) },
-    { name: "VWAP", lean: side(input.vwap) * 0.5 },
-    { name: "30-second move", lean: clip(input.move30, 40) },
-    { name: "5-minute move", lean: clip(input.move5, 80) },
-    { name: "Kalshi", lean: kalshi },
-  ];
-}
-
-export function siteAdjustment(votes: SiteVote[]) {
-  const used = votes.filter((vote) => Number.isFinite(vote.lean) && Math.abs(vote.lean) >= 0.2);
-  if (!used.length) return { points: 0, names: [] as string[] };
-  const score = used.reduce((sum, vote) => sum + Math.max(-1, Math.min(1, vote.lean)), 0) / used.length;
-  return { points: Math.round(score * 6), names: used.map((vote) => vote.name) };
 }
 
 export type ScoredWindow = {
@@ -182,7 +135,7 @@ export function scorePastWindows(candles: Candle[]): ScoredWindow[] {
       market: marketAt(row.start, row.open, null),
       now: row.start * 1000,
       spotAt: row.start * 1000,
-      target: "spot",
+      targetType: "coinbase_window_close",
     });
     const outlook = describeOutlook({
       pUp: model.pUp,

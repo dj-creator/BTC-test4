@@ -14,7 +14,7 @@ const market: MarketQuote = { ticker: "TEST", title: "Test", status: "open", str
   strikeRule: "greater", openTime: start * 1000, closeTime: (start + 900) * 1000,
   yesBid: 0.49, yesAsk: 0.51, noBid: 0.49, noAsk: 0.51, volume: null, openInterest: null };
 const now = start * 1000 + 30_000;
-const input = { candles, market, now, spotAt: now, bookAt: now, spot: 100000, target: "spot" as const };
+const input = { candles, market, now, spotAt: now, bookAt: now, spot: 100000, targetType: "coinbase_window_close" as const };
 
 test("CDF is symmetric, monotonic and centered", () => {
   assert.ok(Math.abs(normalCdf(0) - 0.5) < 1e-6);
@@ -42,27 +42,25 @@ test("spot, target, stale history and expired windows pause with reasons", () =>
     assert.equal(result.pUp, null);
   }
 });
-test("higher price increases probability, tiny samples don't imply empirical calibration", () => {
+test("distance drives the baseline while market quotes cannot create a trade edge", () => {
   const low = buildModel({ ...input, spot: 99900 });
   const high = buildModel({ ...input, spot: 100100 });
   assert.ok(low.pUp! < 0.5);
   assert.ok(high.pUp! > 0.5);
-  assert.ok(high.matches < 20);
-  assert.equal(high.feeAware, null);
-  assert.equal(high.call, "NO TRADE");
+  assert.equal(high.pUp, buildModel({ ...input, spot: 100100, market: { ...market, yesAsk: 0.01, noAsk: 0.01 } }).pUp);
+  assert.equal(buildModel({ ...input, spot: 100000 }).pUp, 0.5);
 });
-test("stale book and nonpositive edges never produce WATCH", () => {
-  const result = buildModel({ ...input, target: "kalshi", bookAt: now - 30001, spot: 100100 });
-  assert.equal(result.call, "NO TRADE");
-  assert.equal(result.feeAware, null);
-  const expensive = buildModel({ ...input, target: "kalshi", market: { ...market, yesAsk: 0.99, noAsk: 0.99 } });
-  assert.equal(expensive.call, "NO TRADE");
+test("Coinbase and official Kalshi target types cannot be silently substituted", () => {
+  const official = buildModel({ ...input, targetType: "kalshi_official_settlement" });
+  assert.equal(official.paused, true);
+  assert.match(official.reason ?? "", /BRTI/);
+  assert.equal(official.pUp, null);
 });
-test("final minute pauses official forecast without BRTI, spot target remains explicit", () => {
+test("Coinbase forecast remains available in final minute while official settlement stays paused", () => {
   const time = market.closeTime - 30000;
   const fresh = [...candles, ...Array.from({ length: 14 }, (_, i) => ({ ...candles[i]!, t: start + i * 60 }))];
   const last = { ...input, candles: fresh, now: time, spotAt: time };
-  assert.equal(buildModel({ ...last, target: "kalshi" }).paused, true);
+  assert.equal(buildModel({ ...last, targetType: "kalshi_official_settlement" }).paused, true);
   assert.equal(buildModel(last).paused, false);
   assert.equal(buildModel(last).regime, "settlement-minute");
 });
@@ -81,7 +79,9 @@ test("settling requires final completed minute; exact touch is not above", () =>
   assert.equal(settleForecasts(rows, [], (start + 900) * 1000), rows);
   const scored = settleForecasts(rows, [final], (start + 900) * 1000);
   assert.equal(scored[0]!.result, "WRONG");
+  assert.equal(scored[0]!.targetType, "coinbase_window_close");
   assert.equal(evaluationSummary(scored).brier, 0.36);
+  assert.ok(Math.abs(evaluationSummary(scored).brierSkill! + 0.44) < 1e-12);
 });
 test("WAIT is included in probability scoring, old versions and corrupt storage excluded", () => {
   const rows = captureForecast([], { now, start, pUp: 0.5, price: 100000, startPx: 100000 });
@@ -90,8 +90,10 @@ test("WAIT is included in probability scoring, old versions and corrupt storage 
   assert.equal(stats.count, 1);
   assert.equal(stats.directional, 0);
   assert.equal(stats.brier, 0.25);
+  assert.equal(stats.brierSkill, 0);
   assert.equal(stats.buckets.reduce((n, b) => n + b.count, 0), 1);
   assert.deepEqual(parseForecasts(JSON.stringify(scored)), scored);
+  assert.deepEqual(parseForecasts(JSON.stringify([{ ...scored[0], targetType: "kalshi_official_settlement" }])), []);
   assert.deepEqual(parseForecasts('{broken'), []);
   assert.deepEqual(parseForecasts(JSON.stringify([{ ...rows[0], version: "v1" }])), []);
 });
