@@ -1,8 +1,7 @@
 import type { Candle, MarketQuote, ModelView } from "./types";
 
-export const MODEL_VERSION = "spot-close-v2";
-const FEE = 0.02; // Explicit assumption per contract, not a fetched Kalshi fee schedule.
-const BUFFER = 0.01;
+export const MODEL_VERSION = "spot-close-v3-baseline";
+export type ForecastTarget = "coinbase_window_close" | "kalshi_official_settlement";
 
 /** Only closed, valid, unique one-minute observations may enter a forecast. */
 export function completedCandles(candles: Candle[], now = Date.now()) {
@@ -28,7 +27,9 @@ export function realizedSigma(candles: Candle[]) {
     const mean = values.reduce((a, b) => a + b, 0) / values.length;
     return values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - 1);
   };
-  const perMin = Math.sqrt(0.75 * variance(returns) + 0.25 * variance(returns.slice(-15)));
+  // Use one transparent trailing horizon. The prior 75/25 blend added a tuned
+  // parameter without a held-out test showing it improved forecasts.
+  const perMin = Math.sqrt(variance(returns));
   if (!Number.isFinite(perMin) || perMin < 1e-8) return null;
   return { perMin, sigma15: perMin * Math.sqrt(15) };
 }
@@ -55,6 +56,7 @@ export function fifteenMinuteWindows(candles: Candle[], excludeStart?: number, n
 
 // Standard normal CDF. A transparent diffusion baseline, not a calibrated probability.
 export function normalCdf(z: number) {
+  if (z === 0) return 0.5;
   const x = Math.abs(z);
   const t = 1 / (1 + 0.2316419 * x);
   const tail = Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI) * t *
@@ -62,37 +64,16 @@ export function normalCdf(z: number) {
   return z >= 0 ? 1 - tail : tail;
 }
 
-/** Match features known at the same elapsed minute, never match on the eventual move. */
-function analogs(candles: Candle[], start: number, elapsed: number, z: number, perMin: number) {
-  const rows = fifteenMinuteWindows(candles, start, start * 1000).filter((w) => w.start + 900 <= start).slice(0, 50);
-  let count = 0;
-  let up = 0;
-  for (const row of rows) {
-    const at = row.start + elapsed * 60;
-    const past = candles.filter((c) => c.t + 60 <= at);
-    const vol = realizedSigma(past);
-    const price = elapsed === 0 ? row.open : past[past.length - 1]?.c;
-    if (!vol || price == null || (elapsed > 0 && past[past.length - 1]?.t !== at - 60)) continue;
-    const ratio = vol.perMin / perMin;
-    const priorZ = Math.log(price / row.open) / (vol.perMin * Math.sqrt(15 - elapsed));
-    if (ratio < 0.5 || ratio > 2 || Math.abs(priorZ - z) > 0.5) continue;
-    count += 1;
-    if (row.close > row.open) up += 1;
-  }
-  return { count, rate: (up + 2) / (count + 4) };
-}
-
 export function buildModel(input: {
   candles: Candle[];
   spot: number | null;
   market: MarketQuote | null;
   now: number;
-  forceNegative?: boolean;
-  target?: "spot" | "kalshi";
+  targetType?: ForecastTarget;
   spotAt?: number | null;
-  bookAt?: number | null;
 }): ModelView {
   const { spot, market, now } = input;
+  const targetType = input.targetType ?? "coinbase_window_close";
   const candles = completedCandles(input.candles, now);
   const sigma = realizedSigma(candles);
   const mom = momentum5(candles);
@@ -103,9 +84,8 @@ export function buildModel(input: {
     mom != null && sigma && Math.abs(mom) > sigma.sigma15 * 0.35 ? "trend" : "chop";
   const volLabel = !sigma ? "unknown vol" : sigma.sigma15 > 0.004 ? "elevated vol" : sigma.sigma15 < 0.0012 ? "quiet vol" : "normal vol";
   const base: ModelView = {
-    paused: true, reason: null, pUp: null, yesAsk: market?.yesAsk ?? null, noAsk: market?.noAsk ?? null,
-    modelMinusAsk: null, feeAware: null, afterBuffer: null, breakevenYes: null, matches: 0,
-    volLabel, regime, call: "PAUSED", momentum: mom,
+    paused: true, reason: null, pUp: null,
+    volLabel, regime, momentum: mom,
     sigmaDollar: sigma && spot ? spot * sigma.sigma15 : null, sigmaToStrike: null,
   };
   const age = input.spotAt == null ? null : now - input.spotAt;
@@ -118,28 +98,14 @@ export function buildModel(input: {
     !["open", "active"].includes(market.status) ? "Market is not open" :
     !sigma ? "Need 61 consecutive completed candles for 60 one-minute returns" :
     now / 1000 - (candles[candles.length - 1]!.t + 60) > 90 ? "Candle history is stale" :
-    inSettle && input.target !== "spot" ? "Settlement minute: official BRTI prints unavailable" : null;
+    targetType === "kalshi_official_settlement" ? "Official BRTI settlement observations are unavailable; Coinbase spot is not a substitute" : null;
   if (reason || !sigma || !market || spot == null || strike == null) return { ...base, reason };
 
   const sigmaToStrike = Math.log(spot / strike) / (sigma.perMin * Math.sqrt(tauMin));
-  const drift = 0.1 * (mom ?? 0) / 5 * Math.min(tauMin, 5);
-  const diffusion = normalCdf((Math.log(spot / strike) + drift) / (sigma.perMin * Math.sqrt(tauMin)));
-  const elapsed = Math.max(0, Math.min(14, Math.floor((now - market.openTime) / 60_000)));
-  const matches = input.target === "spot" ? analogs(candles, market.openTime / 1000, elapsed, sigmaToStrike, sigma.perMin) : { count: 0, rate: 0.5 };
-  const weight = matches.count >= 20 ? Math.min(0.25, matches.count / 200) : 0;
-  const p = Math.max(0.02, Math.min(0.98, 0.5 + 0.85 * ((1 - weight) * diffusion + weight * matches.rate - 0.5)));
-  const validAsk = (p: number | null) => p != null && Number.isFinite(p) && p > 0 && p < 1 ? p : null;
-  const yesAsk = validAsk(input.forceNegative ? 0.9 : market.yesAsk);
-  const noAsk = validAsk(market.noAsk);
-  const bookFresh = input.bookAt != null && now - input.bookAt >= -2000 && now - input.bookAt <= 30_000;
-  const comparable = input.target !== "spot" && bookFresh;
-  const modelMinusAsk = comparable && yesAsk != null ? p - yesAsk : null;
-  const feeAware = modelMinusAsk == null ? null : modelMinusAsk - FEE;
-  const afterBuffer = feeAware == null ? null : feeAware - BUFFER;
-  const noEdge = comparable && noAsk != null ? 1 - p - noAsk - FEE - BUFFER : null;
-  const call: ModelView["call"] = afterBuffer != null && afterBuffer > 0 && afterBuffer >= (noEdge ?? -Infinity) ? "WATCH YES" :
-    noEdge != null && noEdge > 0 ? "WATCH NO" : "NO TRADE";
-  return { ...base, paused: false, pUp: p, sigmaToStrike, matches: matches.count, yesAsk, noAsk,
-    modelMinusAsk, feeAware, afterBuffer, breakevenYes: comparable ? Math.max(0, p - FEE - BUFFER) : null, call,
-    reason: input.target === "spot" ? "Spot-close proxy; no Kalshi fee edge is inferred" : !bookFresh ? "Stale or missing book timestamp" : call === "NO TRADE" ? "Missing asks or edge after assumed fees and buffer ≤ 0" : null };
+  // Zero-drift log-price diffusion is the deliberately simple v3 baseline.
+  // Momentum, candle names, order flow, Kalshi prices and analog matches are
+  // excluded until they demonstrate incremental value on chronological data.
+  const p = normalCdf(sigmaToStrike);
+  return { ...base, paused: false, pUp: p, sigmaToStrike,
+    reason: "Uncalibrated Coinbase spot-close baseline; no Kalshi settlement or trade edge is inferred" };
 }

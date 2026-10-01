@@ -64,16 +64,8 @@ export type ModelView = {
   paused: boolean;
   reason: string | null;
   pUp: number | null;
-  yesAsk: number | null;
-  noAsk: number | null;
-  modelMinusAsk: number | null;
-  feeAware: number | null;
-  afterBuffer: number | null;
-  breakevenYes: number | null;
-  matches: number;
   volLabel: string;
   regime: "chop" | "trend" | "settlement-minute";
-  call: "NO TRADE" | "WATCH YES" | "WATCH NO" | "PAUSED";
   momentum: number | null;
   sigmaDollar: number | null;
   sigmaToStrike: number | null;

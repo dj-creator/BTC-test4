@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { startCoinbaseFeed, useBook, useFlow, useLive, priceAgo, type BookView, type FlowTrade, type LiqPrint } from "@/lib/btc/live";
-import { outlookNow, siteVotes } from "@/lib/btc/outlook";
+import { outlookNow } from "@/lib/btc/outlook";
 import { readPulse, type Lean } from "@/lib/btc/pulse";
 import { readWhales } from "@/lib/btc/intel";
 import { getAltSettled, getSnapshot } from "@/lib/btc/snapshot";
@@ -172,36 +172,15 @@ export function Terminal({ initial }: { initial: Snapshot }) {
     [spot, flow, start, clock],
   );
   const view = useMemo(() => {
-    const minute = aggregate(candles, 1, spot, Math.floor((clock || Date.now()) / 1000));
-    const tape = readTech(minute, spot, pulse.moves);
-    const yesMid = currentMarket != null && currentMarket.openTime <= (clock || Date.now()) && currentMarket.closeTime > (clock || Date.now())
-      && query.data.bookAt != null && (clock || Date.now()) - query.data.bookAt <= 30_000
-      ? currentMarket.yesBid != null && currentMarket.yesAsk != null && currentMarket.yesBid > 0 && currentMarket.yesAsk > 0
-        ? (currentMarket.yesBid + currentMarket.yesAsk) / 2
-        : currentMarket.yesAsk != null && currentMarket.yesAsk > 0 ? currentMarket.yesAsk : null
-      : null;
     return outlookNow({
       candles,
       spot,
       start,
       windowStart: win,
-      asks: null,
       spotAt,
-      trades: flow.trades,
-      candle: candleSignal,
       now: clock || Date.now(),
-      votes: siteVotes({
-        candle: candleSignal,
-        radar: radar.bias,
-        book: pulse.alignment.find((row) => row.label === "Order Book")?.lean ?? "wait",
-        whale: pulse.alignment.find((row) => row.label === "Large Trades")?.lean ?? "wait",
-        vwap: tape.vwap == null || spot == null ? "flat" : spot > tape.vwap ? "up" : spot < tape.vwap ? "down" : "flat",
-        move30: pulse.moves.find((row) => row.ms === 30_000)?.delta ?? null,
-        move5: pulse.moves.find((row) => row.ms === 300_000)?.delta ?? null,
-        kalshiYes: yesMid,
-      }),
     });
-  }, [candles, spot, spotAt, start, win, clock, flow.trades, candleSignal, pulse, radar.bias, currentMarket, query.data.bookAt]);
+  }, [candles, spot, spotAt, start, win, clock]);
   const whales = useMemo(() => readWhales(flow.trades, flow.liqs, clock || Date.now()), [flow, clock]);
 
   useEffect(() => {
@@ -398,17 +377,14 @@ export function Terminal({ initial }: { initial: Snapshot }) {
             <p className="text-[11px] tracking-[0.18em] text-muted">PREDICTION</p>
             <p className="mt-2 text-sm">Will BTC finish above the start line?</p>
             <p className={`mt-3 text-center font-mono text-5xl ${leanClass(lean)}`}>{lean === "yes" ? "YES" : lean === "no" ? "NO" : "WAIT"}</p>
-            <p className="text-center text-xs tracking-widest text-muted">ESTIMATED CHANCE</p>
+            <p className="text-center text-xs tracking-widest text-muted">MODEL ESTIMATE · UP</p>
             <p className="text-center font-mono text-3xl">{pct == null ? "—" : `${pct}%`}</p>
-            <p className="mt-1 min-h-8 text-center text-[11px] leading-snug text-muted">
-              {view.siteWhy.length ? `Site read ${view.sitePoints > 0 ? "+" : ""}${view.sitePoints} points from ${view.siteWhy.join(", ")}. Still experimental.` : "Site read had no lean. The percent is the price model only."}
-            </p>
             <p className="mt-2 text-center text-xs text-warn">EXPERIMENTAL · UNCALIBRATED</p>
-            <p className="mt-1 text-center text-[11px] leading-snug text-muted">This estimates Coinbase finishing above its window open. Accuracy is measured from frozen predictions; no automatic learning is claimed.</p>
+            <p className="mt-1 text-center text-[11px] leading-snug text-muted">This is the model estimate for Coinbase finishing above its window open. Radar, candle patterns, order flow, and Kalshi prices are excluded from the probability.</p>
             <TimerRing leftMs={left} />
             {view.model.paused ? <p role="status" className="mt-2 text-sm text-warn">Estimate paused: {view.model.reason}</p> : null}
             {secs != null && secs <= 60 ? <p className="mt-2 border border-warn p-2 text-sm text-warn">SETTLEMENT MINUTE · Spot forecast only. Official BRTI running average unavailable.</p> : <p className="mt-2 text-center text-xs text-muted">Settlement minute in {secs == null ? "—" : `${Math.max(0, Math.ceil(secs - 60))}s`}</p>}
-            <p className="mt-2 text-xs text-muted">{view.model.matches} comparable completed windows · {view.model.volLabel}</p>
+            <p className="mt-2 text-xs text-muted">60 completed one-minute returns · {view.model.volLabel}</p>
             <p className={`mt-3 text-center font-mono text-sm ${move != null && move > 0.005 ? "text-up" : move != null && move < -0.005 ? "text-down" : "text-muted"}`}>
               {move == null
                 ? "Waiting for the start line"
@@ -1178,13 +1154,13 @@ function ModelCore({ frozen }: { frozen: Frozen[] }) {
   return (
     <article className="border border-line bg-surface p-4 text-sm">
       <p className="text-xs tracking-widest text-muted">MODEL METHOD & CALIBRATION</p>
-      <p className="mt-2 text-warn">EXPERIMENTAL · UNCALIBRATED · spot-close-v2</p>
-      <p className="mt-2 text-muted">Completed one-minute log returns only: variance = 75% last 60 returns + 25% last 15. Forecast uses the normal CDF of log(spot/open) plus a small momentum drift, divided by volatility × √minutes left. Drift = 10% of the five-minute return per minute, capped at five minutes. Probabilities shrink 15% toward 50%.</p>
-      <p className="mt-2 text-muted">Comparable windows match signed distance / volatility and volatility at the same elapsed minute, using only features available then. At least 20 matches are required to blend a smoothed empirical rate (at most 25% weight). These assumptions require held-out validation.</p>
+      <p className="mt-2 text-warn">EXPERIMENTAL · UNCALIBRATED · spot-close-v3-baseline</p>
+      <p className="mt-2 text-muted">The estimate uses the normal CDF of log(spot / Coinbase window open), divided by the volatility of the last 60 completed one-minute returns × √minutes remaining. It assumes zero expected drift and normally distributed future log returns. The model does not add hand-set momentum drift, analog matches, or probability compression.</p>
+      <p className="mt-2 text-muted">This simpler version is not proven more accurate. Candle patterns, radar, order flow, and Kalshi quotes stay visible as context but do not alter the probability. Official Kalshi settlement needs BRTI observations and is not estimated here.</p>
       <p className="mt-2 font-mono text-xs">{stats.count} completed · {stats.directional} directional · {stats.waits} WAIT · {stats.directional ? `${stats.correct}/${stats.directional} correct (${Math.round(stats.correct / stats.directional * 100)}%)` : "Accuracy: collecting predictions"}</p>
-      <p className="mt-2 font-mono text-xs">Brier {stats.brier == null ? "—" : stats.brier.toFixed(3)} · 50/50 baseline 0.250 · Log loss {stats.logLoss == null ? "—" : stats.logLoss.toFixed(3)} (lower is better; includes WAIT)</p>
-      {stats.count > 0 ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr><th>P(up) bucket</th><th>n</th><th>Mean forecast</th><th>Realized up</th></tr></thead><tbody>{stats.buckets.filter((b) => b.count > 0).map((b) => <tr key={b.label}><td className="py-2">{b.label}</td><td>{b.count}</td><td>{Math.round(b.predicted! * 100)}%</td><td>{Math.round(b.observed! * 100)}%</td></tr>)}</tbody></table></div> : <p className="mt-2 text-muted">No completed v2 forecasts yet. Older model records are excluded.</p>}
-      <p className="mt-2 text-xs text-muted">Recorded locally in this browser, only at T+30–60s; not an independently audited track record. Small samples and tab-open selection can bias results. Order book, whale flow and radar remain context, not extra votes in the probability. A positive quoted difference alone does not establish profitability.</p>
+      <p className="mt-2 font-mono text-xs">Brier {stats.brier == null ? "—" : stats.brier.toFixed(3)} · 50/50 baseline 0.250 · Brier skill {stats.brierSkill == null ? "—" : `${(stats.brierSkill * 100).toFixed(1)}%`} · Log loss {stats.logLoss == null ? "—" : stats.logLoss.toFixed(3)}</p>
+      {stats.count > 0 ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr><th>P(up) bucket</th><th>n</th><th>Mean forecast</th><th>Realized up</th></tr></thead><tbody>{stats.buckets.filter((b) => b.count > 0).map((b) => <tr key={b.label}><td className="py-2">{b.label}</td><td>{b.count}</td><td>{Math.round(b.predicted! * 100)}%</td><td>{Math.round(b.observed! * 100)}%</td></tr>)}</tbody></table></div> : <p className="mt-2 text-muted">No completed v3 forecasts yet. Older model records are excluded.</p>}
+      <p className="mt-2 text-xs text-muted">Brier skill compares with the 50/50 forecast; positive means lower Brier loss in this sample, not proof of future edge. Records are local to this browser and only captured at T+30–60s while the tab is open, so sample size and selection bias matter. No profitability claim is made.</p>
     </article>
   );
 }

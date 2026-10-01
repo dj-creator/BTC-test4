@@ -1,5 +1,15 @@
 # BTC Window source review
 
+## Current model status: `spot-close-v3-baseline`
+
+The live Coinbase probability is now a deliberately simple diffusion baseline. It uses only the current Coinbase price, the Coinbase window open, time remaining, and variance from the last 60 consecutive completed one-minute log returns. It assumes zero drift and normally distributed future log returns. This is an uncalibrated model assumption, not a claim of improved hit rate or profitability.
+
+Hand-set momentum drift, historical analog blending, probability compression, candle/tick nudges, dashboard votes, and Kalshi price adjustments have been removed from the probability path. Those signals remain contextual UI information. `kalshi_official_settlement` is an explicit separate target and pauses until official BRTI inputs exist; Coinbase close is not used as its outcome. Frozen v3 evaluations are target-tagged, and the normal test command now includes the BTC regression suite. Brier skill is shown against a 50/50 forecast as a sample statistic only.
+
+Current checkout validation: 68 tests, typecheck, production build, and `git diff --check` pass. Full lint remains blocked by an existing empty catch block in `src/lib/app-data/client.server.ts`. Visual browser QA could not run because the Playwright browser download was returned truncated and the available cloud browser cannot reach this local preview. No live-feed, hosted-site, BRTI, or out-of-sample prediction validation has been performed.
+
+The older v2 assessment below is historical; its model description and validation claims refer to the previous implementation and must not be read as a description of v3.
+
 Reviewed `src/components/btc/terminal.tsx` and its model, price feed, snapshot, chart, pulse, and evaluation dependencies. This is a source review and code change, not a review or deployment of a running website.
 
 ## Assessment of the original version
